@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Streamtube MAX</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    
+    <style>
+        :root {
+            --bg-color: #030000;
+            --red-main: #ff0000;
+            --red-dark: #880000;
+            --glass-bg: rgba(25, 5, 5, 0.4);
+            --glass-border: rgba(255, 0, 0, 0.25);
+        }
+
+        body { margin: 0; padding: 0; background-color: var(--bg-color); color: #ffffff; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; height: 100vh; overflow: hidden; display: flex; flex-direction: column;}
+        
+        /* Эффект Liquid Glass строго на самих объектах */
+        .glass-panel { 
+            background: var(--glass-bg); 
+            backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); 
+            border: 1px solid var(--glass-border); 
+            border-radius: 12px; 
+        }
+
+        /* --- ЛОГОТИП (Прозрачность 20%, текст снизу красный) --- */
+        .brand-logo {
+            background: rgba(0, 0, 0, 0.2);
+            padding: 8px 16px;
+            border-radius: 8px;
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid rgba(255,0,0,0.1);
+            cursor: pointer;
+        }
+        .logo-top { font-size: 22px; font-weight: 900; letter-spacing: 2px; color: #fff; line-height: 1; }
+        .logo-bottom { font-size: 14px; font-weight: 900; color: var(--red-main); margin-top: 2px; line-height: 1; letter-spacing: 4px;}
+
+        /* --- АВТОРИЗАЦИЯ --- */
+        #auth-gate { position: fixed; inset: 0; background: var(--bg-color); display: flex; justify-content: center; align-items: center; z-index: 9999; }
+        .auth-box { width: 90%; max-width: 400px; padding: 40px; text-align: center; }
+        .input-styled { width: 100%; padding: 14px; border-radius: 8px; background: rgba(0,0,0,0.6); border: 1px solid var(--glass-border); color: white; font-size: 16px; box-sizing: border-box; outline: none; margin-bottom: 15px; }
+        .input-styled:focus { border-color: var(--red-main); }
+        .btn-primary { width: 100%; padding: 14px; border-radius: 8px; background: var(--red-main); color: white; font-weight: bold; font-size: 16px; border: none; cursor: pointer; transition: 0.2s; }
+        .btn-primary:hover { background: #cc0000; }
+
+        /* --- КАРКАС ПРИЛОЖЕНИЯ --- */
+        #app-layout { display: none; flex-direction: column; height: 100vh; }
+        
+        header { padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--glass-border); background: #000; z-index: 100; }
+        .user-profile { display: flex; align-items: center; gap: 12px; }
+        .avatar { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--red-main); object-fit: cover; }
+        
+        .main-container { display: flex; flex-grow: 1; overflow: hidden; }
+        
+        /* БОКОВАЯ ПАНЕЛЬ */
+        .sidebar { width: 240px; border-right: 1px solid var(--glass-border); display: flex; flex-direction: column; padding: 20px 0; background: rgba(5,0,0,0.8); }
+        @media(max-width: 768px) { .sidebar { display: none; } }
+        .nav-item { padding: 15px 25px; cursor: pointer; font-size: 16px; font-weight: bold; color: #ccc; transition: 0.2s; display: flex; align-items: center; gap: 15px; border-left: 4px solid transparent;}
+        .nav-item:hover, .nav-item.active { background: rgba(255,0,0,0.1); color: #fff; border-left-color: var(--red-main); }
+        .nav-icon { font-size: 20px; }
+
+        .content-area { flex-grow: 1; overflow-y: auto; padding: 30px; position: relative; }
+        @media(max-width: 768px) { .content-area { padding: 15px; } }
+
+        /* --- ГЛАВНАЯ СТРАНИЦА (СЕТКА СТРИМОВ) --- */
+        .streams-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 25px; }
+        .stream-card { cursor: pointer; position: relative; display: flex; flex-direction: column; transition: transform 0.2s; padding: 10px;}
+        .stream-card:hover { transform: translateY(-5px); border-color: var(--red-main); }
+        .stream-thumb { width: 100%; aspect-ratio: 16/9; background: #111; border-radius: 8px; position: relative; overflow: hidden; display: flex; justify-content: center; align-items: center;}
+        .stream-thumb img { width: 100%; height: 100%; object-fit: cover; opacity: 0.4; }
+        .live-badge { position: absolute; top: 8px; left: 8px; background: var(--red-main); padding: 4px 8px; font-size: 11px; font-weight: bold; border-radius: 4px; }
+        .viewers-badge { position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.8); padding: 4px 8px; font-size: 12px; border-radius: 4px; font-weight: bold; border: 1px solid var(--glass-border);}
+        .stream-info { display: flex; gap: 12px; margin-top: 12px; }
+        .stream-title { font-weight: bold; font-size: 16px; margin: 0 0 4px 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .stream-author { color: #aaa; font-size: 14px; margin: 0; }
+
+        /* --- ПЛЕЕР СТРИМА --- */
+        #stream-view { display: none; height: 100%; }
+        .stream-layout { display: grid; grid-template-columns: 1fr 350px; gap: 20px; height: calc(100vh - 150px); }
+        @media(max-width: 1024px) { .stream-layout { grid-template-columns: 1fr; height: auto; } }
+        
+        .video-wrapper { position: relative; width: 100%; border-radius: 12px; background: #000; overflow: hidden; aspect-ratio: 16/9; border: 2px solid var(--glass-border); }
+        video { width: 100%; height: 100%; object-fit: contain; }
+        
+        .stream-controls-bar { margin-top: 15px; display: flex; justify-content: space-between; align-items: flex-start;}
+        .host-controls { display: flex; gap: 10px; margin-top: 15px; }
+        .btn-action { background: var(--glass-bg); border: 1px solid var(--red-main); color: white; padding: 10px 15px; border-radius: 8px; font-weight: bold; cursor: pointer; }
+        .btn-danger { background: #aa0000; border: none; }
+
+        /* Оверлей звука для телефонов */
+        #unmute-overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.8); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 20; cursor: pointer; }
+        .pulsing-btn { background: var(--red-main); color: white; padding: 15px 30px; border-radius: 30px; font-size: 18px; font-weight: bold; border: none; animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255,0,0,0.7); } 70% { box-shadow: 0 0 0 20px rgba(255,0,0,0); } 100% { box-shadow: 0 0 0 0 rgba(255,0,0,0); } }
+
+        /* Чат */
+        .chat-container { display: flex; flex-direction: column; height: 100%; }
+        .chat-box { flex-grow: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid var(--glass-border); }
+        .chat-msg { font-size: 14px; word-wrap: break-word; }
+        .chat-msg b { color: var(--red-main); }
+        .chat-input-area { display: flex; padding: 15px; gap: 10px; }
+        .chat-input-area input { flex-grow: 1; background: rgba(0,0,0,0.5); border: 1px solid #555; color: white; padding: 10px; border-radius: 6px; outline:none; }
+        .chat-input-area button { background: var(--red-main); color: white; border: none; padding: 0 15px; border-radius: 6px; font-weight: bold; cursor: pointer; }
+
+        /* --- СТУДИЯ АВТОРА --- */
+        #studio-view { display: none; }
+        .studio-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
+        .stat-card { text-align: center; padding: 25px; }
+        .stat-card h3 { margin: 0; color: #aaa; font-size: 16px; }
+        .stat-card .value { font-size: 36px; font-weight: bold; color: var(--red-main); margin-top: 10px; }
+        
+        /* График-заглушка */
+        .chart-container { height: 250px; display: flex; align-items: flex-end; gap: 10px; padding: 20px; border-top: 1px solid var(--glass-border); }
+        .chart-bar { flex-grow: 1; background: var(--red-main); border-radius: 4px 4px 0 0; opacity: 0.7; transition: height 0.5s; position: relative;}
+        .chart-bar:hover { opacity: 1; }
+
+        /* --- ИДЕАЛЬНО ОТЦЕНТРОВАННЫЙ МОДАЛЬНЫЙ ЭКРАН --- */
+        .modal-overlay { 
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; 
+            background: rgba(0,0,0,0.85); backdrop-filter: blur(5px); 
+            display: none; justify-content: center; align-items: center; z-index: 10000; 
+        }
+        .modal-content { width: 90%; max-width: 450px; padding: 30px; position: relative; }
+        .close-modal { position: absolute; top: 15px; right: 15px; background: transparent; border: none; color: white; font-size: 20px; cursor: pointer; }
+
+        /* FAB кнопка запуска */
+        .fab { position: fixed; bottom: 30px; right: 30px; background: var(--red-main); color: white; border: none; width: 60px; height: 60px; border-radius: 50%; font-size: 24px; cursor: pointer; box-shadow: 0 4px 20px rgba(255,0,0,0.5); z-index: 90; display: flex; justify-content: center; align-items: center; transition: transform 0.2s;}
+        .fab:hover { transform: scale(1.1); }
+
+        .toast-container { position: fixed; top: 20px; right: 20px; z-index: 10000; display: flex; flex-direction: column; gap: 10px; }
+        .toast { background: rgba(10,0,0,0.9); border: 1px solid var(--red-main); padding: 15px 20px; border-radius: 8px; font-weight: bold; animation: slideIn 0.3s forwards; }
+        @keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+    </style>
+</head>
+<body>
+
+    <div class="toast-container" id="toast-box"></div>
+
+    <div id="auth-gate">
+        <div class="glass-panel auth-box">
+            <div class="brand-logo" style="margin-bottom: 30px;">
+                <div class="logo-top">STREAM</div>
+                <div class="logo-bottom">MAX</div>
+            </div>
+            <input type="text" id="auth-username" class="input-styled" placeholder="Имя вашего канала..." onkeypress="if(event.key === 'Enter') login()">
+            <button class="btn-primary" onclick="login()">Войти в экосистему</button>
+        </div>
+    </div>
+
+    <div id="app-layout">
+        <header>
+            <div class="brand-logo" onclick="switchView('home')">
+                <div class="logo-top">STREAM</div>
+                <div class="logo-bottom">MAX</div>
+            </div>
+            <div class="user-profile">
+                <span id="header-username" style="font-weight: bold;"></span>
+                <img id="header-avatar" class="avatar" src="">
+                <button class="btn-action" style="padding: 5px 10px; font-size: 12px; margin-left: 10px;" onclick="logout()">Выйти</button>
+            </div>
+        </header>
+
+        <div class="main-container">
+            <div class="sidebar">
+                <div class="nav-item active" id="nav-home" onclick="switchView('home')">
+                    <span class="nav-icon">🏠</span> Главная
+                </div>
+                <div class="nav-item" id="nav-studio" onclick="switchView('studio')">
+                    <span class="nav-icon">📊</span> Студия автора
+                </div>
+            </div>
+
+            <div class="content-area">
+                
+                <div id="home-view">
+                    <h2 style="margin-top:0;">Прямые эфиры</h2>
+                    <div class="streams-grid" id="streams-grid"></div>
+                </div>
+
+                <div id="studio-view">
+                    <h2 style="margin-top:0;">Аналитика канала</h2>
+                    <div class="studio-stats">
+                        <div class="glass-panel stat-card">
+                            <h3>Подписчиков</h3>
+                            <div class="value" id="studio-subs">0</div>
+                        </div>
+                        <div class="glass-panel stat-card">
+                            <h3>Всего просмотров</h3>
+                            <div class="value">1 337</div>
+                        </div>
+                        <div class="glass-panel stat-card">
+                            <h3>Доход (Mock)</h3>
+                            <div class="value" style="color: #00ff00;">$42.50</div>
+                        </div>
+                    </div>
+                    <div class="glass-panel">
+                        <h3 style="padding: 20px 20px 0 20px; margin:0;">Активность зрителей</h3>
+                        <div class="chart-container">
+                            <div class="chart-bar" style="height: 30%;"></div>
+                            <div class="chart-bar" style="height: 50%;"></div>
+                            <div class="chart-bar" style="height: 20%;"></div>
+                            <div class="chart-bar" style="height: 80%;"></div>
+                            <div class="chart-bar" style="height: 60%;"></div>
+                            <div class="chart-bar" style="height: 90%;"></div>
+                            <div class="chart-bar" style="height: 100%;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="stream-view">
+                    <div class="stream-layout">
+                        <div>
+                            <div class="video-wrapper">
+                                <div id="unmute-overlay" onclick="enableAudioAndPlay()">
+                                    <button class="pulsing-btn">🔊 Нажмите, чтобы включить звук</button>
+                                    <p style="margin-top:15px; font-size:12px; color:#aaa;">Требование мобильных браузеров</p>
+                                </div>
+                                <div class="live-badge">🔴 LIVE <span id="viewer-count" style="margin-left:5px;">👁 0</span></div>
+                                
+                                <video id="main-video" playsinline webkit-playsinline autoplay muted></video>
+                            </div>
+
+                            <div class="stream-controls-bar">
+                                <div style="display: flex; gap: 15px; align-items: center;">
+                                    <img id="stream-author-avatar" class="avatar" src="" style="width: 50px; height: 50px;">
+                                    <div>
+                                        <h2 id="stream-title" style="margin: 0; font-size: 20px;">Название стрима</h2>
+                                        <p id="stream-author-name" style="margin: 5px 0 0 0; color: #aaa;">Имя автора</p>
+                                    </div>
+                                </div>
+                                <button id="btn-subscribe" class="btn-action" style="display:none;" onclick="toggleSub()">⭐ Подписаться</button>
+                            </div>
+
+                            <div class="host-controls" id="host-controls-panel" style="display:none;">
+                                <button class="btn-action" onclick="flipCamera()">🔄 Сменить камеру</button>
+                                <button class="btn-action btn-danger" onclick="stopStream()">⏹ Завершить эфир</button>
+                            </div>
+                        </div>
+
+                        <div class="glass-panel chat-container">
+                            <h3 style="margin:0; padding: 15px; border-bottom: 1px solid var(--glass-border);">Чат эфира</h3>
+                            <div class="chat-box" id="chat-box"></div>
+                            <div class="chat-input-area">
+                                <input type="text" id="chat-input" placeholder="Сообщение..." onkeypress="if(event.key==='Enter') sendChat()">
+                                <button onclick="sendChat()">➤</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+        
+        <button class="fab" id="fab-start" onclick="openStreamModal()" title="Начать стрим">🎥</button>
+    </div>
+
+    <div class="modal-overlay" id="start-modal">
+        <div class="glass-panel modal-content">
+            <button class="close-modal" onclick="closeStreamModal()">✖</button>
+            <h2 style="margin-top: 0; color: var(--red-main);">Настройка трансляции</h2>
+            <p style="color: #aaa; margin-bottom: 20px;">Введите данные для выхода в прямой эфир.</p>
+            <input type="text" id="setup-title" class="input-styled" placeholder="Название стрима (напр. Играем на сервере!)">
+            <button class="btn-primary" onclick="startStream()">🚀 В ЭФИР</button>
+        </div>
+    </div>
+
+    <script>
+        // Глобальные переменные
+        let myName = "";
+        let peer = null;
+        let localStream = null;
+        let isBroadcasting = false;
+        let currentFacingMode = "user";
+        
+        let hostConnections = []; // Соединения со зрителями (если я хост)
+        let viewerConnection = null; // Мое соединение с хостом (если я зритель)
+        
+        let activeStreams = {};
+        let subscriptions = JSON.parse(localStorage.getItem('streammax_subs') || "[]");
+        let mqttClient = null;
+        let heartbeatInt = null;
+        const TOPIC = "streamtube_max_network_v1";
+
+        function showToast(msg) {
+            const box = document.getElementById('toast-box');
+            const el = document.createElement('div');
+            el.className = 'toast'; el.innerText = msg;
+            box.appendChild(el);
+            setTimeout(() => el.remove(), 3000);
+        }
+
+        function getAvatar(name) { return `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(name)}&backgroundColor=111111`; }
+
+        // --- АВТОРИЗАЦИЯ И НАВИГАЦИЯ ---
+        function login() {
+            const input = document.getElementById('auth-username').value.trim();
+            if(input.length > 2) {
+                localStorage.setItem('streammax_user', input);
+                initApp();
+            } else { alert("Имя должно быть длиннее 2 символов"); }
+        }
+        function logout() { localStorage.removeItem('streammax_user'); location.reload(); }
+
+        window.onload = () => { if(localStorage.getItem('streammax_user')) initApp(); };
+
+        function initApp() {
+            myName = localStorage.getItem('streammax_user');
+            document.getElementById('auth-gate').style.display = 'none';
+            document.getElementById('app-layout').style.display = 'flex';
+            document.getElementById('header-username').innerText = myName;
+            document.getElementById('header-avatar').src = getAvatar(myName);
+            document.getElementById('studio-subs').innerText = subscriptions.length;
+            initNetwork();
+            switchView('home');
+        }
+
+        function switchView(viewName) {
+            document.getElementById('home-view').style.display = 'none';
+            document.getElementById('studio-view').style.display = 'none';
+            document.getElementById('stream-view').style.display = 'none';
+            
+            document.getElementById('nav-home').classList.remove('active');
+            document.getElementById('nav-studio').classList.remove('active');
+            
+            if(viewName === 'home') {
+                document.getElementById('home-view').style.display = 'block';
+                document.getElementById('nav-home').classList.add('active');
+                document.getElementById('fab-start').style.display = 'flex';
+                if(viewerConnection) disconnectViewer(); // Отключаемся если вышли со стрима
+            } else if (viewName === 'studio') {
+                document.getElementById('studio-view').style.display = 'block';
+                document.getElementById('nav-studio').classList.add('active');
+                document.getElementById('fab-start').style.display = 'flex';
+            } else if (viewName === 'stream') {
+                document.getElementById('stream-view').style.display = 'block';
+                document.getElementById('fab-start').style.display = 'none';
+            }
+        }
+
+        // --- СЕТЕВОЙ ДВИЖОК MQTT (Список стримов) ---
+        function initNetwork() {
+            mqttClient = mqtt.connect('wss://broker.hivemq.com:8884/mqtt');
+            mqttClient.on('connect', () => {
+                mqttClient.subscribe(TOPIC);
+                setInterval(() => {
+                    const now = Date.now(); let changed = false;
+                    for (let id in activeStreams) {
+                        if (now - activeStreams[id].ts > 6000) { delete activeStreams[id]; changed = true; }
+                    }
+                    if(changed) renderStreams();
+                }, 3000);
+            });
+            mqttClient.on('message', (t, msg) => {
+                try {
+                    const data = JSON.parse(msg.toString());
+                    if(data.type === 'live') {
+                        activeStreams[data.hostId] = { ...data.info, ts: Date.now() };
+                        renderStreams();
+                    } else if (data.type === 'offline') {
+                        delete activeStreams[data.hostId];
+                        renderStreams();
+                    }
+                } catch(e) {}
+            });
+        }
+
+        function renderStreams() {
+            const grid = document.getElementById('streams-grid');
+            grid.innerHTML = "";
+            const keys = Object.keys(activeStreams);
+            if(keys.length === 0) {
+                grid.innerHTML = `<h3 style="color:#555; grid-column: 1/-1;">Сейчас нет активных трансляций...</h3>`;
+                return;
+            }
+            keys.forEach(id => {
+                const s = activeStreams[id];
+                const isMe = (peer && peer.id === id);
+                grid.innerHTML += `
+                    <div class="glass-panel stream-card" onclick="joinStream('${id}', '${s.title}', '${s.author}')">
+                        <div class="stream-thumb">
+                            <img src="${getAvatar(s.author)}">
+                            <div class="live-badge">LIVE</div>
+                            <div class="viewers-badge">👁 ${s.viewers}</div>
+                        </div>
+                        <div class="stream-info">
+                            <img src="${getAvatar(s.author)}" class="avatar" style="width:36px; height:36px; border-width:1px;">
+                            <div>
+                                <div class="stream-title">${s.title}</div>
+                                <div class="stream-author">${isMe ? "Твой стрим" : s.author}</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+        }
+
+        // --- ЛОГИКА ВЕЩАНИЯ (ХОСТ) ---
+        function openStreamModal() { document.getElementById('start-modal').style.display = 'flex'; }
+        function closeStreamModal() { document.getElementById('start-modal').style.display = 'none'; }
+
+        async function startStream() {
+            const title = document.getElementById('setup-title').value || "Трансляция MAX";
+            closeStreamModal();
+
+            try {
+                // Идеальные настройки для мобильных камер
+                localStream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: currentFacingMode }, 
+                    audio: true 
+                });
+
+                // STUN Серверы фиксят баг мобильных сетей
+                peer = new Peer({ config: {'iceServers': [{ urls: 'stun:stun.l.google.com:19302' }]} });
+                
+                peer.on('open', (id) => {
+                    isBroadcasting = true;
+                    hostConnections = [];
+                    switchView('stream');
+                    
+                    document.getElementById('unmute-overlay').style.display = 'none';
+                    document.getElementById('host-controls-panel').style.display = 'flex';
+                    document.getElementById('btn-subscribe').style.display = 'none';
+                    
+                    document.getElementById('stream-title').innerText = title;
+                    document.getElementById('stream-author-name').innerText = myName + " (Вы Хост)";
+                    document.getElementById('stream-author-avatar').src = getAvatar(myName);
+                    document.getElementById('chat-box').innerHTML = "";
+
+                    const video = document.getElementById('main-video');
+                    video.srcObject = localStream;
+                    video.muted = true; // Хост не должен слышать сам себя
+                    video.play().catch(()=>{});
+
+                    // Публикуем себя в сеть
+                    heartbeatInt = setInterval(() => {
+                        mqttClient.publish(TOPIC, JSON.stringify({
+                            type: 'live', hostId: id,
+                            info: { title: title, author: myName, viewers: hostConnections.length }
+                        }));
+                    }, 2000);
+                });
+
+                // ФИКС WEBRTC АРХИТЕКТУРЫ: Зритель подключается по данным, а Хост звонит Зрителю
+                peer.on('connection', (conn) => {
+                    hostConnections.push(conn);
+                    updateViewers();
+                    
+                    // Когда зритель подключился к чату, Хост отправляет ему видеопоток
+                    peer.call(conn.peer, localStream);
+
+                    conn.on('data', (data) => {
+                        if(data.type === 'chat') {
+                            appendChat(data.user, data.msg);
+                            // Ретранслируем всем
+                            hostConnections.forEach(c => { if(c.peer !== conn.peer) c.send(data); });
+                        }
+                    });
+                    conn.on('close', () => {
+                        hostConnections = hostConnections.filter(c => c.peer !== conn.peer);
+                        updateViewers();
+                    });
+                });
+
+            } catch(e) {
+                alert("Ошибка доступа к камере! Проверьте разрешения браузера.");
+            }
+        }
+
+        async function flipCamera() {
+            if(!isBroadcasting || !localStream) return;
+            currentFacingMode = currentFacingMode === "user" ? "environment" : "user";
+            try {
+                const newStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: currentFacingMode } });
+                const newVideoTrack = newStream.getVideoTracks()[0];
+                
+                localStream.removeTrack(localStream.getVideoTracks()[0]);
+                localStream.addTrack(newVideoTrack);
+                document.getElementById('main-video').srcObject = localStream;
+
+                // Заменяем трек у всех зрителей
+                for(let conns in peer.connections) {
+                    peer.connections[conns].forEach(c => {
+                        if(c.peerConnection) {
+                            const sender = c.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+                            if(sender) sender.replaceTrack(newVideoTrack);
+                        }
+                    });
+                }
+                showToast("Камера переключена 🔄");
+            } catch(e) { showToast("Не удалось сменить камеру"); }
+        }
+
+        function stopStream() {
+            clearInterval(heartbeatInt);
+            if(peer) {
+                mqttClient.publish(TOPIC, JSON.stringify({ type: 'offline', hostId: peer.id }));
+                peer.destroy(); 
+            }
+            if(localStream) localStream.getTracks().forEach(t => t.stop());
+            isBroadcasting = false;
+            switchView('home');
+        }
+
+        function updateViewers() {
+            const count = hostConnections.length;
+            document.getElementById('viewer-count').innerText = `👁 ${count}`;
+            hostConnections.forEach(c => c.send({ type: 'sys', viewers: count }));
+        }
+
+        // --- ЛОГИКА ПРОСМОТРА (ЗРИТЕЛЬ) ---
+        let currentHostAuthor = "";
+        
+        function joinStream(hostId, title, author) {
+            if(isBroadcasting) return showToast("Вы уже ведете стрим!");
+            
+            switchView('stream');
+            document.getElementById('host-controls-panel').style.display = 'none';
+            document.getElementById('unmute-overlay').style.display = 'flex'; // Показываем кнопку Unmute
+            document.getElementById('chat-box').innerHTML = "";
+            
+            currentHostAuthor = author;
+            document.getElementById('stream-title').innerText = title;
+            document.getElementById('stream-author-name').innerText = author;
+            document.getElementById('stream-author-avatar').src = getAvatar(author);
+            
+            checkSubStatus();
+
+            peer = new Peer({ config: {'iceServers': [{ urls: 'stun:stun.l.google.com:19302' }]} });
+            
+            peer.on('open', () => {
+                // 1. Подключаемся к хосту для чата
+                viewerConnection = peer.connect(hostId);
+                viewerConnection.on('data', (data) => {
+                    if(data.type === 'chat') appendChat(data.user, data.msg);
+                    if(data.type === 'sys') document.getElementById('viewer-count').innerText = `👁 ${data.viewers}`;
+                });
+                
+                // 2. ЖДЕМ ЗВОНКА ОТ ХОСТА (Исправление бага Mobile/WebRTC)
+                peer.on('call', (call) => {
+                    call.answer(); // Отвечаем без отправки своего видео!
+                    call.on('stream', (hostStream) => {
+                        const video = document.getElementById('main-video');
+                        video.srcObject = hostStream;
+                        // Звук изначально выключен, чтобы сработал autoplay на мобилках
+                        video.muted = true; 
+                        video.play().catch(e => console.log("Требуется клик для play"));
+                    });
+                });
+            });
+        }
+
+        // Принудительное включение звука для обхода блокировок Safari/Chrome
+        function enableAudioAndPlay() {
+            const video = document.getElementById('main-video');
+            video.muted = false;
+            video.play();
+            document.getElementById('unmute-overlay').style.display = 'none';
+        }
+
+        function disconnectViewer() {
+            if(peer && !isBroadcasting) { peer.destroy(); peer = null; }
+            document.getElementById('main-video').srcObject = null;
+        }
+
+        // --- ПОДПИСКИ И ЧАТ ---
+        function checkSubStatus() {
+            const btn = document.getElementById('btn-subscribe');
+            btn.style.display = 'block';
+            if(subscriptions.includes(currentHostAuthor)) {
+                btn.style.background = '#aa0000'; btn.innerText = "★ Вы подписаны";
+            } else {
+                btn.style.background = 'transparent'; btn.innerText = "⭐ Подписаться";
+            }
+        }
+
+        function toggleSub() {
+            if(subscriptions.includes(currentHostAuthor)) {
+                subscriptions = subscriptions.filter(s => s !== currentHostAuthor);
+                showToast(`Отписка от ${currentHostAuthor}`);
+            } else {
+                subscriptions.push(currentHostAuthor);
+                showToast(`Подписка на ${currentHostAuthor} оформлена!`);
+            }
+            localStorage.setItem('streammax_subs', JSON.stringify(subscriptions));
+            document.getElementById('studio-subs').innerText = subscriptions.length;
+            checkSubStatus();
+        }
+
+        function sendChat() {
+            const input = document.getElementById('chat-input');
+            const msg = input.value.trim();
+            if(!msg) return;
+            
+            appendChat(myName, msg);
+            if(isBroadcasting) {
+                hostConnections.forEach(c => c.send({ type: 'chat', user: myName, msg: msg }));
+            } else if (viewerConnection) {
+                viewerConnection.send({ type: 'chat', user: myName, msg: msg });
+            }
+            input.value = "";
+        }
+
+        function appendChat(user, text) {
+            const box = document.getElementById('chat-box');
+            box.innerHTML += `<div class="chat-msg"><b>${user}:</b> ${text}</div>`;
+            box.scrollTop = box.scrollHeight;
+        }
+    </script>
+</body>
+</html>
